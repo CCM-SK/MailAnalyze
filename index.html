@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src https:">
 <link rel="icon" href="data:,">
 <title>Mail-Röntgen – E-Mails lokal analysieren</title>
 <style>
@@ -33,6 +33,7 @@ td{overflow-wrap:anywhere}code,pre{font:.85rem/1.45 ui-monospace,Consolas,monosp
 pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto;background:var(--bg);padding:.8rem;border-radius:4px;margin:0}
 details{margin-top:.8rem}summary{cursor:pointer;color:var(--m)}
 .tag{display:inline-block;font-size:.75rem;font-weight:700;color:#fff;padding:0 .35rem;border-radius:3px;margin:0 .25rem .2rem 0}
+button{font:inherit;padding:.4rem .9rem;border:1px solid var(--t);background:var(--c);color:var(--t);border-radius:4px;cursor:pointer}button:hover:not(:disabled){background:var(--t);color:var(--bg)}button:disabled{opacity:.5}small{color:var(--m)}
 footer{color:var(--m);font-size:.85rem;margin-top:2.5rem}
 a{color:var(--lo)}
 </style></head><body><main>
@@ -53,7 +54,7 @@ const hv=(h,n)=>(h.find(x=>x[0].toLowerCase()==n)||[])[1]||'';
 const hall=(h,n)=>h.filter(x=>x[0].toLowerCase()==n).map(x=>x[1]);
 const addr=s=>(s.match(/<([^>]+)>/)||s.match(/([^\s<>"]+@[^\s<>"]+)/)||[])[1]||'';
 const dom=a=>((String(a).match(/@([^>\s;,)"]+)/)||[])[1]||'').toLowerCase();
-const base=d=>d.split('.').slice(-2).join('.');
+const base=d=>{const p=d.split('.');return p.slice(/^(co|com|org|net|gov|ac)$/.test(p[p.length-2])&&p[p.length-1].length==2?-3:-2).join('.')};
 
 /* ---------- EML / MIME ---------- */
 function parseHead(t){const h=[];t.replace(/\r?\n[ \t]+/g,' ').split(/\r?\n/).forEach(l=>{const m=l.match(/^([^:\s]+):\s*(.*)$/);if(m)h.push([m[1],m[2]])});return h}
@@ -104,7 +105,26 @@ const BRANDS=['paypal','amazon','microsoft','apple','google','dhl','dpd','ups','
 const KW=/dringend|sofort|verifizier|bestätig|gesperrt|deaktiviert|passwort|zugangsdaten|anmelden|mahnung|gewinn|letzte warnung|urgent|immediately|verify|suspended|password|invoice|gift ?card|wire transfer|bitcoin|within 24|innerhalb von 24|click here|hier klicken|security alert|sicherheitswarnung/gi;
 const BAD=/\.(exe|scr|js|jse|vbs|vbe|bat|cmd|com|pif|lnk|hta|msi|ps1|jar|wsf|reg|dll|cpl|chm|iso|img|vhd|one)$/i;
 const MACRO=/\.(docm|xlsm|pptm|xlsb|dotm|xlam|doc|xls|ppt|rtf)$/i,ARCH=/\.(zip|rar|7z|ace|gz|tar|cab)$/i,SCRIPTY=/\.(html?|svg|xhtml|shtml)$/i;
-function linkFlags(u,txt){const f=[];let x;try{x=new URL(u)}catch{return[['low','Ungültige URL']]}
+const OFFICIAL={paypal:'paypal.com',amazon:'amazon.',microsoft:'microsoft.com',apple:'apple.com',google:'google.com',dhl:'dhl.',sparkasse:'sparkasse.de',netflix:'netflix.com',facebook:'facebook.com',instagram:'instagram.com',docusign:'docusign.',linkedin:'linkedin.com',telekom:'telekom.de',vodafone:'vodafone.',commerzbank:'commerzbank.de',postbank:'postbank.de',volksbank:'volksbank.de',dropbox:'dropbox.com',outlook:'outlook.com'};
+const GOOD=/^(microsoftonline|sharepoint|office365|office|windows|live|azure|googleapis|gstatic|googleusercontent|youtube|amazonaws|amazonses|paypalobjects|icloud|fbcdn|dropboxusercontent|licdn|dhl)\./;
+const HOSTING=/(pages\.dev|workers\.dev|web\.app|firebaseapp\.com|netlify\.app|github\.io|vercel\.app|blogspot\.com|weebly\.com|wixsite\.com|herokuapp\.com|glitch\.me|ngrok\.(io|app)|trycloudflare\.com|duckdns\.org|000webhostapp\.com|forms\.gle|r2\.dev|webflow\.io)$/;
+const lev=(a,b)=>{const d=[...Array(b.length+1).keys()];for(let i=1;i<=a.length;i++){let p=d[0];d[0]=i;for(let j=1;j<=b.length;j++){const t=d[j];d[j]=Math.min(d[j]+1,d[j-1]+1,p+(a[i-1]==b[j-1]?0:1));p=t}}return d[b.length]};
+function urlExtra(u,x,h,f){
+ const b=base(h),lab=b.split('.')[0],hr=(u.match(/^[a-z]+:\/\/([^\/?#]*)/i)||[])[1]||'',norm=t=>t.replace(/0/g,'o').replace(/1/g,'l').replace(/rn/g,'m').replace(/vv/g,'w').replace(/-/g,'');
+ if(/[^\x00-\x7F]/.test(hr))f.push(/[\u0370-\u04FF]/.test(hr)?['high','Kyrillische/griechische Look-alike-Zeichen']:['med','Sonderzeichen in Domain (IDN)']);
+ if(/^(0x[0-9a-f]+|\d{8,10})$/i.test(hr.split(':')[0]))f.push(['high','Verschleierte IP-Schreibweise']);
+ if(!GOOD.test(b+'.'))for(const k in OFFICIAL){const v=OFFICIAL[k];if(v.endsWith('.')?b.startsWith(v):(b==v||b.endsWith('.'+v)))continue;
+  if(h.split('.').slice(0,-2).join('.').includes(k)||x.pathname.toLowerCase().includes(k+'.'))f.push(['high','Marke "'+k+'" in Subdomain/Pfad, Domain gehört jemand anderem: '+b]);
+  else if(lab==k||norm(lab).includes(k)||lab.includes(k))f.push(['med','Domain enthält Markenname "'+k+'": '+b]);
+  else if(k.length>4&&lev(norm(lab),k)<=1)f.push(['high','Tippfehler-Domain (Typosquatting) von "'+k+'": '+b])}
+ const q=[...x.searchParams.values()].find(v=>/^https?:\/\//i.test(v));
+ if(q){f.push([/safelinks\.protection|urldefense|mimecast|^www\.google\.com$/.test(h)?'low':'med','Weiterleitung/Wrapper → '+q.slice(0,100)]);linkFlags(q).forEach(e=>f.push([e[0],'Weiterleitungsziel: '+e[1]]))}
+ if(x.port&&!/^(80|443)$/.test(x.port))f.push(['med','Ungewöhnlicher Port :'+x.port]);
+ if(u.length>250)f.push(['low','Sehr lange URL ('+u.length+' Zeichen)']);
+ if((u.match(/%[0-9a-f]{2}/gi)||[]).length>8||/%25[0-9a-f]{2}/i.test(u))f.push(['med','Stark kodierte URL (Verschleierung)']);
+ if(/(^|[.-])(login|signin|verify|secure|account|update|konto|webscr|bank|confirm|wallet)([.-]|$)/i.test(h)&&!f.some(e=>/Marke|Tippfehler/.test(e[1])))f.push(['med','Login-/Sicherheitsbegriff im Domainnamen']);
+ if(HOSTING.test(h))f.push(['med','Gratis-Hosting/Formulardienst (häufig für Phishing missbraucht)'])}
+function linkFlags(u,txt){const f=[];let x;const sc=u.match(/^(javascript|vbscript|data):/i);if(sc)return[['high','Gefährliches URL-Schema '+sc[1].toLowerCase()+':']];try{x=new URL(u)}catch{return[['low','Ungültige URL']]}
  const h=x.hostname.toLowerCase();
  if(/^\d{1,3}(\.\d{1,3}){3}$/.test(h)||h.startsWith('['))f.push(['high','IP statt Domain']);
  if(h.includes('xn--'))f.push(['high','Punycode (Homograph)']);
@@ -115,9 +135,29 @@ function linkFlags(u,txt){const f=[];let x;try{x=new URL(u)}catch{return[['low',
  if(x.protocol=='http:')f.push(['low','Unverschlüsselt (HTTP)']);
  if(h.split('.').length>4)f.push(['low','Viele Subdomains']);
  if(txt&&/^\s*(https?:\/\/|www\.)/i.test(txt)){const td=((txt.trim().match(/^(?:https?:\/\/)?([^\/\s?#]+)/i)||[])[1]||'').toLowerCase().replace(/^www\./,'');if(td.includes('.')&&base(td)!=base(h))f.push(['high','Linktext zeigt anderes Ziel: '+td])}
- return f}
+ urlExtra(u,x,h,f);return f}
+/* ---------- Anhang-Tiefenprüfung ---------- */
+const MAGIC=[['PDF',[0x25,0x50,0x44,0x46],/pdf/],['ZIP/OOXML',[0x50,0x4B,3,4],/zip|docx|xlsx|pptx|docm|xlsm|pptm|jar|apk|odt|ods|epub|xlsb|dotm|xlam/],['OLE (Office/MSI)',[0xD0,0xCF,0x11,0xE0],/doc|xls|ppt|msg|msi|dot|xlt/],['RTF',[0x7B,0x5C,0x72,0x74],/rtf|doc/],['Windows-EXE/DLL',[0x4D,0x5A],/exe|dll|scr|com|sys|cpl/],['LNK-Verknüpfung',[0x4C,0,0,0,1,0x14,2],/lnk/],['RAR',[0x52,0x61,0x72,0x21],/rar/],['7-Zip',[0x37,0x7A,0xBC,0xAF],/7z/],['GZIP',[0x1F,0x8B],/gz/],['PNG',[0x89,0x50,0x4E,0x47],/png/],['JPEG',[0xFF,0xD8,0xFF],/jpe?g/],['GIF',[0x47,0x49,0x46,0x38],/gif/],['ELF',[0x7F,0x45,0x4C,0x46],/^$/]];
+function zipList(b){const d=new DataView(b.buffer,b.byteOffset,b.length);let e=-1;for(let i=b.length-22;i>=Math.max(0,b.length-65600);i--)if(d.getUint32(i,true)==0x06054B50){e=i;break}if(e<0)return null;
+ let n=d.getUint16(e+10,true),p=d.getUint32(e+16,true);const r=[];while(n--&&p+46<=b.length&&d.getUint32(p,true)==0x02014B50){const nl=d.getUint16(p+28,true);r.push({n:dec(b.subarray(p+46,p+46+nl)),enc:d.getUint16(p+8,true)&1});p+=46+nl+d.getUint16(p+30,true)+d.getUint16(p+32,true)}return r}
+function inspect(a){
+ const b=a.bytes,ext=((a.name.match(/\.(\w+)$/)||[])[1]||'').toLowerCase(),f=a.f=[],uris=a.uris=[],m=MAGIC.find(x=>x[1].every((v,i)=>b[i]===v)),s=lat(b.subarray(0,Math.min(b.length,3e6)));let info=m?m[0]:'';
+ if(m&&m[0]!='Windows-EXE/DLL'&&ext&&!/^(txt|dat|bin)$/.test(ext)&&!m[2].test(ext))f.push([/^(LNK|ELF)/.test(m[0])?'high':'med','Dateityp passt nicht zur Endung (.'+ext+' ist '+m[0]+')']);
+ if(m&&m[0]=='PDF'){[[/\/(JavaScript|JS)\b/,'high','PDF enthält JavaScript'],[/\/Launch\b/,'high','PDF kann Programme starten (/Launch)'],[/\/OpenAction|\/AA\b/,'med','PDF führt beim Öffnen eine Aktion aus'],[/\/EmbeddedFile/,'med','PDF enthält eingebettete Datei'],[/\/RichMedia|\/XFA/,'med','PDF mit Active Content (RichMedia/XFA)']].forEach(([r,v,t])=>r.test(s)&&f.push([v,t]));(s.match(/\/URI\s*\(([^)]{4,300})\)/g)||[]).forEach(x=>uris.push(x.replace(/^\/URI\s*\(|\)$/g,'')))}
+ if(m&&m[0]=='ZIP/OOXML'){const z=zipList(b);if(z){info+=' ('+z.length+' Einträge)';a.list=z.slice(0,30).map(e=>e.n);
+  if(z.some(e=>e.enc))f.push(['med','Passwortgeschütztes Archiv – Inhalt nicht prüfbar']);
+  if(z.some(e=>/vbaProject\.bin$/i.test(e.n)))f.push(['high','Enthält VBA-Makros']);
+  if(z.some(e=>/(embeddings|oleObject|externalLinks)/i.test(e.n)))f.push(['med','Eingebettete Objekte/externe Verknüpfungen']);
+  const bad=z.filter(e=>BAD.test(e.n));if(bad.length)f.push(['high','Enthält gefährliche Dateien: '+bad.slice(0,4).map(e=>e.n).join(', ')])}}
+ if(m&&m[0].startsWith('OLE')&&/V\0B\0A\0|M\0a\0c\0r\0o\0s\0/.test(s))f.push(['high','Enthält VBA-Makros']);
+ if(m&&m[0]=='RTF'&&/\\objdata|\\objocx|\\objautlink/.test(s))f.push(['high','RTF mit eingebettetem OLE-Objekt (Exploit-Vektor)']);
+ if(/^(html?|svg|js|vbs|ps1|bat|cmd|hta|txt|xml|wsf|jse)$/.test(ext)||(!m&&/^[\x09\x0a\x0d\x20-\x7e]{200}/.test(s))){
+  if(/eval\s*\(|atob\s*\(|fromCharCode|unescape\s*\(|powershell|-enc(odedcommand)?\b|WScript|ActiveXObject|document\.write|Invoke-Expression|FromBase64String/i.test(s))f.push(['high','Aktiver/verschleierter Code im Anhang']);
+  if(/type=["']?password/i.test(s))f.push(['high','Passwortfeld im Anhang (Phishing-Seite)']);
+  (s.match(/https?:\/\/[^\s"'<>)]{4,200}/g)||[]).slice(0,30).forEach(u=>uris.push(u));info=info||'Text/Skript'}
+ a.info=info||'unbekannt'}
 function analyze(h,o){
- const F=[],add=(s,t,d)=>F.push({s,t,d});
+ const F=[],add=(s,t,d)=>F.push({s,t,d});o.att.forEach(inspect);
  const from=ew(hv(h,'from')),rp=ew(hv(h,'reply-to')),ret=hv(h,'return-path'),fa=addr(from),fd=dom(fa);
  // Authentifizierung
  let ar=hall(h,'authentication-results').join(' ');const rs=hv(h,'received-spf').match(/^\s*(\w+)/);if(rs)ar+=' spf='+rs[1];
@@ -145,9 +185,12 @@ function analyze(h,o){
  const subj=ew(hv(h,'subject')),kw=[...new Set(((subj+' '+text).match(KW)||[]).map(s=>s.toLowerCase()))];
  if(kw.length>=3)add('med','Typische Phishing-Formulierungen','Gefunden: '+kw.slice(0,8).join(', '));else if(kw.length)add('low','Dringlichkeits-/Zugangsbegriffe',kw.join(', '));
  // Links
+ const zw=((subj+text).match(/[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069]/g)||[]).length;
+ if(zw>5)add('med','Unsichtbare Steuerzeichen ('+zw+')','Zero-Width/RTL-Zeichen werden benutzt, um Filter oder Leser zu täuschen.');
  const L=new Map();
- if(doc)doc.querySelectorAll('a[href]').forEach(a=>{const u=a.getAttribute('href').trim();if(/^(https?:|ftp:)/i.test(u)&&!L.has(u))L.set(u,a.textContent.trim().slice(0,200))});
+ if(doc)doc.querySelectorAll('a[href]').forEach(a=>{const u=a.getAttribute('href').trim();if(/^(https?:|ftp:|javascript:|vbscript:|data:)/i.test(u)&&!L.has(u))L.set(u,a.textContent.trim().slice(0,200))});
  (text.match(/https?:\/\/[^\s<>"')\]]+/g)||[]).forEach(u=>{if(!L.has(u))L.set(u,'')});
+ o.att.forEach(a=>(a.uris||[]).forEach(u=>{if(!L.has(u))L.set(u,'Anhang '+a.name)}));
  const links=[...L].map(([u,t])=>({u,t,f:linkFlags(u,t)}));
  links.forEach(l=>l.f.forEach(([s,d])=>add(s,d,l.u.slice(0,120))));
  if(!links.length)add('ok','Keine Links gefunden','');
@@ -155,11 +198,18 @@ function analyze(h,o){
   if(doc.querySelector('form'))add('high','HTML-Formular in der Mail','Eingebettete Formulare dienen häufig dem Abgreifen von Passwörtern.');
   if(doc.querySelector('script'))add('med','Script-Tags im HTML','E-Mails sollten kein JavaScript enthalten.');
   if(doc.querySelector('iframe,object,embed'))add('med','Eingebettete Objekte (iframe/object/embed)','');
+  if(doc.querySelector('meta[http-equiv="refresh" i]'))add('high','Meta-Refresh-Weiterleitung','Leitet beim Öffnen automatisch auf eine andere Seite.');
+  if(doc.querySelector('base[href]'))add('med','<base href> gesetzt','Verändert die Auflösung aller relativen Links.');
+  const hid=[...doc.querySelectorAll('[style]')].filter(e=>/display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|opacity\s*:\s*0(?![.\d])|max-height\s*:\s*0/i.test(e.getAttribute('style'))&&e.textContent.trim().length>25);
+  if(hid.length)add('low','Versteckter Text ('+hid.length+' Elemente)','Unsichtbarer Text täuscht oft Spamfilter (kann auch ein harmloser Newsletter-Preheader sein): '+hid[0].textContent.trim().slice(0,80));
+  const ri=doc.querySelectorAll('img[src^="http"]').length,di=doc.querySelectorAll('img[src^="data:"]').length;
+  if(ri)add('low','Externe Bilder ('+ri+')','Werden beim Anzeigen nachgeladen und verraten Öffnung und IP.');
+  if(di)add('low','Eingebettete Bilder ('+di+')','Als data:-URI – bei Bild-Phishing (z. B. QR-Codes) üblich.');
   const px=[...doc.querySelectorAll('img')].filter(i=>/^\s*[01]\s*(px)?\s*$/.test(i.getAttribute('width')||'x')||/^\s*[01]\s*(px)?\s*$/.test(i.getAttribute('height')||'x')).length;
   if(px)add('low','Tracking-Pixel ('+px+')','Beim Laden von Bildern erfährt der Absender, dass die Mail geöffnet wurde.');
   if(!text.trim()&&doc.querySelector('img'))add('low','Nur Bilder, kein Text','Umgeht oft Textfilter.')}
  // Anhänge
- o.att.forEach(a=>{const n=a.name,b=a.bytes;a.f=[];
+ o.att.forEach(a=>{const n=a.name,b=a.bytes;
   if(/\.\w{2,5}\s*\.(exe|scr|js|bat|cmd|lnk|vbs|com|hta|pif)$/i.test(n))a.f.push(['high','Doppelte Endung']);
   if(BAD.test(n))a.f.push(['high','Ausführbarer/gefährlicher Dateityp']);
   if(b[0]==0x4D&&b[1]==0x5A&&!/\.(exe|dll|scr|com)$/i.test(n))a.f.push(['high','Windows-Programm (MZ) getarnt']);
@@ -172,8 +222,10 @@ function analyze(h,o){
  // Received
  const rec=hall(h,'received').map(r=>({from:(r.match(/from\s+(.+?)\s+(?:by|\()/i)||[])[1]||'',by:(r.match(/by\s+(\S+)/i)||[])[1]||'',ip:[...new Set(r.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b|\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi)||[])].join(', '),t:(r.split(';').pop()||'').trim()}));
  if(!rec.length)add('low','Keine Received-Header','Der Übertragungsweg ist nicht nachvollziehbar.');
- const w={high:25,med:10,low:3,ok:0};let score=Math.min(100,F.reduce((a,x)=>a+w[x.s],0));
- return{F,links,rec,score,text,subj,from,rp}}
+ const D={};links.forEach(l=>{try{const hh=new URL(l.u).hostname,k=base(hh);(D[k]=D[k]||{n:0,h:new Set()}).n++;D[k].h.add(hh)}catch{}});
+ const w={high:25,med:10,low:3,ok:0};let score=Math.min(100,[...new Map(F.map(x=>[x.s+x.t.split(':')[0],x])).values()].reduce((a,x)=>a+w[x.s],0));
+ return{F,links,rec,score,text,subj,from,rp,D}}
+const DOMS=R=>{const e=Object.entries(R.D).slice(0,15);return e.length?'<h2>Domains ('+Object.keys(R.D).length+')</h2><div class="card">'+tbl(['Domain','Links','Hosts','Online-Prüfung'],e.map(([b,v],i)=>'<tr><td>'+esc(b)+'</td><td>'+v.n+'</td><td>'+esc([...v.h].join(', '))+'</td><td id="d'+i+'">–</td></tr>'))+'<p><button id="chk">Domains online prüfen</button></p><small>Sendet nur Domainnamen (nicht die Links) an Cloudflare-DNS (Malware-/Phishing-Blocklist) und rdap.org (Registrierungsdatum). Die verlinkten Seiten selbst werden nie aufgerufen.</small></div>':''};
 
 /* ---------- Ausgabe ---------- */
 const order={high:0,med:1,low:2,ok:3},lbl={high:'Kritisch',med:'Warnung',low:'Hinweis',ok:'In Ordnung'};
@@ -193,11 +245,22 @@ async function run(file){
  '<h2>Befunde ('+F.filter(x=>x.s!='ok').length+')</h2><div class="card">'+F.map(x=>'<div class="fi"><span class="badge '+x.s+'">'+lbl[x.s]+'</span><div><b>'+esc(x.t)+'</b>'+(x.d?'<p>'+esc(x.d)+'</p>':'')+'</div></div>').join('')+'</div>'+
  '<h2>Header</h2><div class="card">'+tbl(['Feld','Wert'],rows.map(r=>'<tr><th>'+r[0]+'</th><td>'+esc(r[1])+'</td></tr>'))+'<details><summary>Alle Rohdaten-Header ('+h.length+')</summary>'+tbl(['Header','Wert'],h.map(r=>'<tr><th>'+esc(r[0])+'</th><td>'+esc(r[1])+'</td></tr>'))+'</details></div>'+
  '<h2>Übertragungsweg ('+R.rec.length+' Stationen, neueste zuerst)</h2><div class="card">'+(R.rec.length?tbl(['#','Von','Über','IP','Zeit'],R.rec.map((r,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(r.from)+'</td><td>'+esc(r.by)+'</td><td>'+esc(r.ip)+'</td><td>'+esc(r.t)+'</td></tr>')):'Keine Received-Header vorhanden.')+'</div>'+
- '<h2>Links ('+R.links.length+')</h2><div class="card">'+(R.links.length?tbl(['Ziel (nicht klickbar)','Angezeigter Text','Bewertung'],R.links.map(l=>'<tr><td><code>'+esc(l.u.replace(/^http/i,'hxxp'))+'</code></td><td>'+esc(l.t)+'</td><td>'+(l.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td></tr>')):'Keine Links.')+'</div>'+
- '<h2>Anhänge ('+o.att.length+')</h2><div class="card">'+(o.att.length?tbl(['Datei','Typ','Größe','SHA-256','Bewertung'],o.att.map((a,i)=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.type)+'</td><td>'+a.bytes.length+' B</td><td><code id="h'+i+'">…</code></td><td>'+(a.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td></tr>')):'Keine Anhänge.')+'</div>'+
+ '<h2>Links ('+R.links.length+')</h2><div class="card">'+(R.links.length?tbl(['Ziel (nicht klickbar)','Angezeigter Text','Bewertung','Extern prüfen'],R.links.map(l=>'<tr><td><code>'+esc(l.u.replace(/^http/i,'hxxp'))+'</code></td><td>'+esc(l.t)+'</td><td>'+(l.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td><td>'+(/^https?:/i.test(l.u)?'<a href="https://transparencyreport.google.com/safe-browsing/search?url='+encodeURIComponent(l.u)+'" target="_blank" rel="noopener noreferrer">Safe Browsing</a>':'')+'</td></tr>')):'Keine Links.')+'</div>'+DOMS(R)+
+ '<h2>Anhänge ('+o.att.length+')</h2><div class="card">'+(o.att.length?tbl(['Datei','Erkannter Typ / Inhalt','Größe','SHA-256','Bewertung'],o.att.map((a,i)=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.info)+(a.list?'<br><small>'+esc(a.list.slice(0,8).join(', '))+'</small>':'')+'</td><td>'+a.bytes.length+' B</td><td><code id="h'+i+'">…</code></td><td>'+(a.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td></tr>')):'Keine Anhänge.')+'</div>'+
  '<h2>Inhalt</h2><div class="card"><pre>'+esc(R.text.slice(0,20000)||'(kein Textinhalt)')+'</pre>'+(o.html?'<details><summary>HTML-Quelltext anzeigen</summary><pre>'+esc(o.html.slice(0,60000))+'</pre></details>':'')+'</div>';
- o.att.forEach(async(a,i)=>{try{const d=await crypto.subtle.digest('SHA-256',a.bytes),s=[...new Uint8Array(d)].map(x=>x.toString(16).padStart(2,'0')).join('');$('h'+i).textContent=s}catch{$('h'+i).textContent='n/a'}});
+ o.att.forEach(async(a,i)=>{try{const d=await crypto.subtle.digest('SHA-256',a.bytes),s=[...new Uint8Array(d)].map(x=>x.toString(16).padStart(2,'0')).join('');$('h'+i).innerHTML=esc(s.slice(0,16))+'…<br><a href="https://www.virustotal.com/gui/file/'+s+'" target="_blank" rel="noopener noreferrer">VirusTotal</a>'}catch{$('h'+i).textContent='n/a'}});
+const bt=$('chk');if(bt)bt.onclick=()=>{bt.disabled=true;check(Object.entries(R.D).slice(0,15))}
 }
+const dq=async(host,sec)=>(await fetch('https://'+(sec?'security.':'')+'cloudflare-dns.com/dns-query?name='+encodeURIComponent(host)+'&type=A',{headers:{accept:'application/dns-json'}})).json();
+async function check(doms){
+ for(const [i,[b,v]] of doms.entries()){const c=$('d'+i),o=[],hs=[...v.h];c.textContent='…';
+  if(/^[\d.]+$|^\[/.test(hs[0])){c.textContent='IP-Adresse – kein Domain-Check';continue}
+  try{const ips=x=>(x.Answer||[]).filter(a=>a.type==1).map(a=>a.data);let bl=false,nx=true;
+   for(const h of hs.slice(0,5)){const [n,s]=await Promise.all([dq(h,0),dq(h,1)]);if(n.Status!=3)nx=false;if(ips(s).includes('0.0.0.0')&&!ips(n).includes('0.0.0.0'))bl=true}
+   o.push(bl?['high','Von Cloudflare als Malware/Phishing blockiert']:nx?['med','Domain existiert nicht (mehr)']:['ok','Keine DNS-Blockierung'])}catch{o.push(['low','DNS-Check fehlgeschlagen'])}
+  try{const r=await(await fetch('https://rdap.org/domain/'+b)).json(),ev=(r.events||[]).find(e=>e.eventAction=='registration');
+   if(ev){const d=Math.floor((Date.now()-new Date(ev.eventDate))/864e5);o.push([d<30?'high':d<180?'med':'ok','Registriert vor '+d+' Tagen'])}else o.push(['low','Kein Registrierungsdatum'])}catch{o.push(['low','Domain-Alter nicht abrufbar'])}
+  c.innerHTML=o.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')}}
 const f=$('f'),dz=$('drop');
 f.onchange=()=>f.files[0]&&run(f.files[0]);
 ['dragover','dragenter'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('on')}));
