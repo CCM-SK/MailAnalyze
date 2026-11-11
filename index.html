@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<link rel="icon" href="data:,">
+<title>Mail-Röntgen – E-Mails lokal analysieren</title>
+<style>
+:root{--bg:#f2f3ef;--c:#fff;--t:#1b1f23;--m:#636b74;--b:#dcdfd8;--hi:#c62828;--me:#b26a00;--lo:#1e5fbf;--ok:#2e7d32;--ac:#1b1f23}
+@media(prefers-color-scheme:dark){:root{--bg:#14171a;--c:#1c2024;--t:#e6e8e3;--m:#9aa2aa;--b:#2c3238;--hi:#ef5350;--me:#ffb74d;--lo:#64a0ff;--ok:#66bb6a;--ac:#e6e8e3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:2rem 1rem 4rem}
+h1{font:700 2.1rem/1.1 Georgia,"Times New Roman",serif;margin:0 0 .4rem}
+h2{font:700 1.15rem Georgia,serif;margin:2rem 0 .6rem}
+.sub{color:var(--m);max-width:62ch;margin:0 0 1.5rem}
+#drop{display:block;border:2px dashed var(--m);border-radius:6px;padding:2.2rem 1rem;text-align:center;cursor:pointer;background:var(--c)}
+#drop:hover,#drop.on,#drop:focus-within{border-color:var(--t);border-style:solid}
+#drop b{display:block;font-size:1.1rem}#drop span{color:var(--m);font-size:.9rem}
+#f{position:absolute;opacity:0;width:1px;height:1px}
+.card{background:var(--c);border:1px solid var(--b);border-radius:6px;padding:1rem 1.1rem}
+.verdict{display:flex;gap:1.2rem;align-items:center;border-left:8px solid var(--v);flex-wrap:wrap}
+.verdict .n{font:700 3rem/1 Georgia,serif;color:var(--v)}
+.verdict h2{margin:0;color:var(--v)}
+.bar{height:6px;background:var(--b);border-radius:3px;margin-top:.5rem;width:260px;max-width:100%}.bar i{display:block;height:100%;background:var(--v);border-radius:3px}
+.fi{display:flex;gap:.7rem;padding:.6rem 0;border-bottom:1px solid var(--b)}.fi:last-child{border:0}
+.badge{flex:none;min-width:5.2rem;text-align:center;font-size:.78rem;font-weight:700;padding:.15rem .4rem;border-radius:3px;height:1.5rem;color:#fff}
+.high{background:var(--hi)}.med{background:var(--me)}.low{background:var(--lo)}.ok{background:var(--ok)}
+.fi p{margin:0;color:var(--m);font-size:.92rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{text-align:left;padding:.4rem .6rem;border-bottom:1px solid var(--b);vertical-align:top}
+th{color:var(--m);font-weight:600;white-space:nowrap}
+td{overflow-wrap:anywhere}code,pre{font:.85rem/1.45 ui-monospace,Consolas,monospace}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto;background:var(--bg);padding:.8rem;border-radius:4px;margin:0}
+details{margin-top:.8rem}summary{cursor:pointer;color:var(--m)}
+.tag{display:inline-block;font-size:.75rem;font-weight:700;color:#fff;padding:0 .35rem;border-radius:3px;margin:0 .25rem .2rem 0}
+footer{color:var(--m);font-size:.85rem;margin-top:2.5rem}
+a{color:var(--lo)}
+</style></head><body><main>
+<h1>Mail-Röntgen</h1>
+<p class="sub">E-Mail hochladen (.eml, .msg, .emlx, .mbox) – die Datei wird zerlegt und auf Phishing-, Spam- und Malware-Hinweise geprüft. Alles passiert lokal in deinem Browser; es wird nichts hochgeladen oder gesendet.</p>
+<label id="drop"><input type="file" id="f" accept=".eml,.msg,.emlx,.mbox,.txt,message/rfc822"><b>Datei hier ablegen oder klicken</b><span>Inhalte werden nie ausgeführt oder gerendert.</span></label>
+<div id="out" aria-live="polite"></div>
+<footer>Heuristische Analyse – kein Ersatz für ein Mail-Gateway oder eine Sandbox. Ein unauffälliges Ergebnis ist keine Garantie. Bei Zweifeln: Link/Anhang nicht öffnen und die IT-Sicherheit fragen.</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dec=(b,cs)=>{try{return new TextDecoder(cs||'utf-8').decode(b)}catch{return new TextDecoder().decode(b)}};
+const bin=s=>Uint8Array.from(s,c=>c.charCodeAt(0)&255);
+const lat=u=>{let s='';for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode.apply(null,u.subarray(i,i+8192));return s};
+const hx=(m,x)=>String.fromCharCode(parseInt(x,16));
+const hv=(h,n)=>(h.find(x=>x[0].toLowerCase()==n)||[])[1]||'';
+const hall=(h,n)=>h.filter(x=>x[0].toLowerCase()==n).map(x=>x[1]);
+const addr=s=>(s.match(/<([^>]+)>/)||s.match(/([^\s<>"]+@[^\s<>"]+)/)||[])[1]||'';
+const dom=a=>((String(a).match(/@([^>\s;,)"]+)/)||[])[1]||'').toLowerCase();
+const base=d=>d.split('.').slice(-2).join('.');
+
+/* ---------- EML / MIME ---------- */
+function parseHead(t){const h=[];t.replace(/\r?\n[ \t]+/g,' ').split(/\r?\n/).forEach(l=>{const m=l.match(/^([^:\s]+):\s*(.*)$/);if(m)h.push([m[1],m[2]])});return h}
+function ew(s){return String(s).replace(/(\?=)\s+(=\?)/g,'$1$2').replace(/=\?([^?]+)\?([bqBQ])\?([^?]*)\?=/g,(_,cs,e,t)=>{try{return dec(e.toLowerCase()=='b'?bin(atob(t)):bin(t.replace(/_/g,' ').replace(/=([0-9A-F]{2})/gi,hx)),cs)}catch{return t}})}
+function par(v,k){const m=v.match(new RegExp(';\\s*'+k+'\\*?=\\s*(?:"([^"]*)"|([^;\\s]+))','i'));let r=m?(m[1]??m[2]):'';const e=r.match(/^([\w-]+)'[^']*'(.*)$/);if(e)try{r=decodeURIComponent(e[2])}catch{}return r}
+function parsePart(raw,o){
+ const i=raw.search(/\r?\n\r?\n/),h=parseHead(i<0?raw:raw.slice(0,i)),body=i<0?'':raw.slice(i).replace(/^\r?\n\r?\n/,'');
+ const ct=hv(h,'content-type')||'text/plain',type=ct.split(';')[0].trim().toLowerCase();
+ if(type.startsWith('multipart/')){const b=par(ct,'boundary');if(b)body.split('--'+b).slice(1).forEach(p=>{if(!p.startsWith('--'))parsePart(p.replace(/^\r?\n/,''),o)});return h}
+ const enc=hv(h,'content-transfer-encoding').trim().toLowerCase();let bytes;
+ if(enc=='base64'){try{bytes=bin(atob(body.replace(/[^A-Za-z0-9+\/=]/g,'')))}catch{bytes=new Uint8Array()}}
+ else if(enc=='quoted-printable')bytes=bin(body.replace(/=\r?\n/g,'').replace(/=([0-9A-F]{2})/gi,hx));else bytes=bin(body);
+ const cd=hv(h,'content-disposition'),fn=ew(par(';'+cd,'filename')||par(ct,'name'));
+ if(fn||/^\s*attachment/i.test(cd)||!type.startsWith('text/'))o.att.push({name:fn||'(unbenannt)',type,bytes});
+ else if(type=='text/html')o.html+=dec(bytes,par(ct,'charset'));else o.text+=dec(bytes,par(ct,'charset'));
+ return h}
+
+/* ---------- MSG (OLE/CFB) ---------- */
+function cfb(buf){
+ const d=new DataView(buf),u=new Uint8Array(buf),ss=1<<d.getUint16(30,true),ms=1<<d.getUint16(32,true),END=0xFFFFFFFA;
+ const nFat=d.getUint32(44,true),cut=d.getUint32(56,true),sec=i=>(i+1)*ss;
+ const fs=[];for(let i=0;i<109&&fs.length<nFat;i++)fs.push(d.getUint32(76+i*4,true));
+ let ds=d.getUint32(68,true),nd=d.getUint32(72,true);
+ while(ds<END&&nd-->0){const o=sec(ds);for(let i=0;i<ss/4-1&&fs.length<nFat;i++)fs.push(d.getUint32(o+i*4,true));ds=d.getUint32(o+ss-4,true)}
+ const fat=[];fs.forEach(s=>{for(let i=0;i<ss/4;i++)fat.push(d.getUint32(sec(s)+i*4,true))});
+ const chain=(s,t)=>{const r=[];while(s<END&&r.length<1e6){r.push(s);s=t[s]}return r};
+ const rd=(s,size)=>{const c=chain(s,fat),o=new Uint8Array(c.length*ss);c.forEach((x,i)=>o.set(u.subarray(sec(x),sec(x)+ss),i*ss));return o.subarray(0,size)};
+ const dir=rd(d.getUint32(48,true),Infinity),dv=new DataView(dir.buffer,dir.byteOffset,dir.length),ents=[];
+ for(let i=0;i<dir.length/128;i++){const o=i*128,n=Math.min(dv.getUint16(o+64,true),64);ents.push({name:dec(dir.subarray(o,o+n-2),'utf-16le'),t:dir[o+66],l:dv.getUint32(o+68,true),r:dv.getUint32(o+72,true),c:dv.getUint32(o+76,true),s:dv.getUint32(o+116,true),z:dv.getUint32(o+120,true)})}
+ const root=ents[0],mini=rd(root.s,root.z),mf=rd(d.getUint32(60,true),Infinity),mfd=new DataView(mf.buffer,mf.byteOffset,mf.length),mfat=[];
+ for(let i=0;i<mf.length/4;i++)mfat.push(mfd.getUint32(i*4,true));
+ const stream=e=>{if(e.z>=cut)return rd(e.s,e.z);const o=new Uint8Array(chain(e.s,mfat).length*ms);chain(e.s,mfat).forEach((x,i)=>o.set(mini.subarray(x*ms,x*ms+ms),i*ms));return o.subarray(0,e.z)};
+ const files={},walk=(i,p)=>{if(i>=END||!ents[i])return;const e=ents[i];walk(e.l,p);if(e.t==2)files[p+e.name]=stream(e);else if(e.t==1)walk(e.c,p+e.name+'/');walk(e.r,p)};
+ walk(root.c,'');return files}
+function parseMsg(buf){
+ const f=cfb(buf),g=(id,p='')=>{let b=f[p+'__substg1.0_'+id+'001F'];if(b)return dec(b,'utf-16le');b=f[p+'__substg1.0_'+id+'001E'];return b?dec(b,'windows-1252'):''};
+ const th=g('007D');let h=th?parseHead(th):[];
+ if(!hv(h,'from'))h.push(['From',g('0C1A')+' <'+(g('5D01')||g('0C1F'))+'>']);
+ if(!hv(h,'subject'))h.push(['Subject',g('0037')]);if(!hv(h,'to'))h.push(['To',g('0E04')]);
+ const hb=f['__substg1.0_10130102'],o={text:g('1000'),html:hb?dec(hb,'utf-8'):g('1013'),att:[]};
+ new Set(Object.keys(f).map(k=>(k.match(/^(__attach_version1\.0_#[0-9A-F]+\/)/i)||[])[1]).filter(Boolean)).forEach(p=>{const b=f[p+'__substg1.0_37010102'];if(b)o.att.push({name:g('3707',p)||g('3704',p)||'(unbenannt)',type:g('370E',p),bytes:b})});
+ return{h,o}}
+
+/* ---------- Analyse ---------- */
+const SHORT=['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','buff.ly','rebrand.ly','cutt.ly','shorturl.at','tiny.cc'];
+const TLD=/\.(zip|mov|top|xyz|click|gq|tk|ml|cf|ga|work|rest|icu|monster|cfd|sbs|buzz)$/;
+const BRANDS=['paypal','amazon','microsoft','apple','google','dhl','dpd','ups','fedex','sparkasse','volksbank','postbank','commerzbank','netflix','facebook','instagram','docusign','linkedin','telekom','vodafone','paketdienst','post'];
+const KW=/dringend|sofort|verifizier|bestätig|gesperrt|deaktiviert|passwort|zugangsdaten|anmelden|mahnung|gewinn|letzte warnung|urgent|immediately|verify|suspended|password|invoice|gift ?card|wire transfer|bitcoin|within 24|innerhalb von 24|click here|hier klicken|security alert|sicherheitswarnung/gi;
+const BAD=/\.(exe|scr|js|jse|vbs|vbe|bat|cmd|com|pif|lnk|hta|msi|ps1|jar|wsf|reg|dll|cpl|chm|iso|img|vhd|one)$/i;
+const MACRO=/\.(docm|xlsm|pptm|xlsb|dotm|xlam|doc|xls|ppt|rtf)$/i,ARCH=/\.(zip|rar|7z|ace|gz|tar|cab)$/i,SCRIPTY=/\.(html?|svg|xhtml|shtml)$/i;
+function linkFlags(u,txt){const f=[];let x;try{x=new URL(u)}catch{return[['low','Ungültige URL']]}
+ const h=x.hostname.toLowerCase();
+ if(/^\d{1,3}(\.\d{1,3}){3}$/.test(h)||h.startsWith('['))f.push(['high','IP statt Domain']);
+ if(h.includes('xn--'))f.push(['high','Punycode (Homograph)']);
+ if(x.username)f.push(['high','user@ in URL verschleiert Ziel']);
+ if(/\.(exe|scr|js|bat|cmd|msi|jar|vbs|lnk|iso)$/i.test(x.pathname))f.push(['high','Link auf ausführbare Datei']);
+ if(SHORT.includes(h))f.push(['med','URL-Verkürzer']);
+ if(TLD.test(h))f.push(['med','Verdächtige TLD']);
+ if(x.protocol=='http:')f.push(['low','Unverschlüsselt (HTTP)']);
+ if(h.split('.').length>4)f.push(['low','Viele Subdomains']);
+ if(txt&&/^\s*(https?:\/\/|www\.)/i.test(txt)){const td=((txt.trim().match(/^(?:https?:\/\/)?([^\/\s?#]+)/i)||[])[1]||'').toLowerCase().replace(/^www\./,'');if(td.includes('.')&&base(td)!=base(h))f.push(['high','Linktext zeigt anderes Ziel: '+td])}
+ return f}
+function analyze(h,o){
+ const F=[],add=(s,t,d)=>F.push({s,t,d});
+ const from=ew(hv(h,'from')),rp=ew(hv(h,'reply-to')),ret=hv(h,'return-path'),fa=addr(from),fd=dom(fa);
+ // Authentifizierung
+ let ar=hall(h,'authentication-results').join(' ');const rs=hv(h,'received-spf').match(/^\s*(\w+)/);if(rs)ar+=' spf='+rs[1];
+ ['spf','dkim','dmarc'].forEach(k=>{const m=ar.match(new RegExp('\\b'+k+'=(\\w+)','i')),v=m?m[1].toLowerCase():'';const N=k.toUpperCase();
+  if(v=='pass')add('ok',N+' bestanden','Absender wurde von den Empfangsservern bestätigt.');
+  else if(/fail|permerror/.test(v))add('high',N+' fehlgeschlagen','Ergebnis: '+v+' – der Absender konnte nicht verifiziert werden, möglicherweise gefälscht.');
+  else if(/softfail|temperror/.test(v))add('med',N+': '+v,'Schwache Verifikation, Absender nur eingeschränkt vertrauenswürdig.');
+  else add('low',N+(v?': '+v:' nicht vorhanden'),'Keine verwertbare Authentifizierung gefunden (bei .msg-Dateien fehlen Header oft).')});
+ // Absender
+ if(!fa)add('med','Kein Absender erkennbar','Der From-Header fehlt oder ist ungültig.');
+ if(rp&&dom(addr(rp))&&fd&&base(dom(addr(rp)))!=base(fd))add('high','Reply-To weicht vom Absender ab','Antworten gehen an '+addr(rp)+' statt an '+fa+' – typisch für Betrug/BEC.');
+ if(ret&&fd&&dom(addr(ret))&&base(dom(addr(ret)))!=base(fd))add('med','Return-Path weicht ab','Envelope-Absender '+addr(ret)+' ≠ From-Domain '+fd+' (bei Newslettern normal, sonst verdächtig).');
+ const dn=from.replace(/<[^>]*>/,'').replace(/"/g,'').toLowerCase().trim();
+ if(/@/.test(dn)&&dom(dn)&&base(dom(dn))!=base(fd))add('high','Anzeigename enthält fremde Adresse','Angezeigt: "'+dn+'" – tatsächlich: '+fa);
+ BRANDS.forEach(b=>{if(dn.includes(b)&&fd&&!fd.includes(b))add('high','Markenname im Anzeigenamen, fremde Domain','"'+b+'" im Namen, aber Absenderdomain ist '+fd+'.')});
+ if(!hv(h,'message-id'))add('low','Keine Message-ID','Seriöse Mailserver vergeben immer eine Message-ID.');
+ else{const md=dom(hv(h,'message-id'));if(md&&fd&&base(md)!=base(fd))add('low','Message-ID-Domain weicht ab',md+' ≠ '+fd)}
+ if(!hv(h,'date'))add('low','Kein Datum','Der Date-Header fehlt.');
+ if(!hv(h,'to')&&!hv(h,'cc'))add('low','Kein Empfänger im Header','Hinweis auf BCC-Massenversand.');
+ const sf=hv(h,'x-spam-flag'),ss=parseFloat((hv(h,'x-spam-score').match(/-?[\d.]+/)||[])[0]);
+ if(/yes/i.test(sf)||/^yes/i.test(hv(h,'x-spam-status'))||ss>=5)add('med','Als Spam markiert','Spam-Filter des Providers: Flag='+(sf||'-')+(isNaN(ss)?'':', Score='+ss));
+ // Inhalt
+ let doc=null,text=o.text;
+ if(o.html){doc=new DOMParser().parseFromString(o.html,'text/html');if(!text.trim())text=doc.body.textContent.replace(/\n\s*\n\s*\n+/g,'\n\n')}
+ const subj=ew(hv(h,'subject')),kw=[...new Set(((subj+' '+text).match(KW)||[]).map(s=>s.toLowerCase()))];
+ if(kw.length>=3)add('med','Typische Phishing-Formulierungen','Gefunden: '+kw.slice(0,8).join(', '));else if(kw.length)add('low','Dringlichkeits-/Zugangsbegriffe',kw.join(', '));
+ // Links
+ const L=new Map();
+ if(doc)doc.querySelectorAll('a[href]').forEach(a=>{const u=a.getAttribute('href').trim();if(/^(https?:|ftp:)/i.test(u)&&!L.has(u))L.set(u,a.textContent.trim().slice(0,200))});
+ (text.match(/https?:\/\/[^\s<>"')\]]+/g)||[]).forEach(u=>{if(!L.has(u))L.set(u,'')});
+ const links=[...L].map(([u,t])=>({u,t,f:linkFlags(u,t)}));
+ links.forEach(l=>l.f.forEach(([s,d])=>add(s,d,l.u.slice(0,120))));
+ if(!links.length)add('ok','Keine Links gefunden','');
+ if(doc){
+  if(doc.querySelector('form'))add('high','HTML-Formular in der Mail','Eingebettete Formulare dienen häufig dem Abgreifen von Passwörtern.');
+  if(doc.querySelector('script'))add('med','Script-Tags im HTML','E-Mails sollten kein JavaScript enthalten.');
+  if(doc.querySelector('iframe,object,embed'))add('med','Eingebettete Objekte (iframe/object/embed)','');
+  const px=[...doc.querySelectorAll('img')].filter(i=>/^\s*[01]\s*(px)?\s*$/.test(i.getAttribute('width')||'x')||/^\s*[01]\s*(px)?\s*$/.test(i.getAttribute('height')||'x')).length;
+  if(px)add('low','Tracking-Pixel ('+px+')','Beim Laden von Bildern erfährt der Absender, dass die Mail geöffnet wurde.');
+  if(!text.trim()&&doc.querySelector('img'))add('low','Nur Bilder, kein Text','Umgeht oft Textfilter.')}
+ // Anhänge
+ o.att.forEach(a=>{const n=a.name,b=a.bytes;a.f=[];
+  if(/\.\w{2,5}\s*\.(exe|scr|js|bat|cmd|lnk|vbs|com|hta|pif)$/i.test(n))a.f.push(['high','Doppelte Endung']);
+  if(BAD.test(n))a.f.push(['high','Ausführbarer/gefährlicher Dateityp']);
+  if(b[0]==0x4D&&b[1]==0x5A&&!/\.(exe|dll|scr|com)$/i.test(n))a.f.push(['high','Windows-Programm (MZ) getarnt']);
+  if(MACRO.test(n))a.f.push(['med','Office-Dokument (evtl. Makros)']);
+  if(ARCH.test(n))a.f.push(['med','Archiv – Inhalt nicht prüfbar']);
+  if(SCRIPTY.test(n))a.f.push(['med','HTML/SVG-Anhang (Phishing-Seite)']);
+  if(/[\u202e]/.test(n))a.f.push(['high','Unicode-RTL-Trick im Dateinamen']);
+  a.f.forEach(([s,d])=>add(s,d+': '+n,''))});
+ if(!o.att.length)add('ok','Keine Anhänge','');
+ // Received
+ const rec=hall(h,'received').map(r=>({from:(r.match(/from\s+(.+?)\s+(?:by|\()/i)||[])[1]||'',by:(r.match(/by\s+(\S+)/i)||[])[1]||'',ip:[...new Set(r.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b|\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi)||[])].join(', '),t:(r.split(';').pop()||'').trim()}));
+ if(!rec.length)add('low','Keine Received-Header','Der Übertragungsweg ist nicht nachvollziehbar.');
+ const w={high:25,med:10,low:3,ok:0};let score=Math.min(100,F.reduce((a,x)=>a+w[x.s],0));
+ return{F,links,rec,score,text,subj,from,rp}}
+
+/* ---------- Ausgabe ---------- */
+const order={high:0,med:1,low:2,ok:3},lbl={high:'Kritisch',med:'Warnung',low:'Hinweis',ok:'In Ordnung'};
+const tbl=(head,rows)=>'<div class="tw"><table><thead><tr>'+head.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
+async function run(file){
+ const out=$('out');out.innerHTML='<p>Analysiere …</p>';
+ let h,o;
+ try{const buf=await file.arrayBuffer(),u=new Uint8Array(buf);
+  if(u[0]==0xD0&&u[1]==0xCF)({h,o}=parseMsg(buf));
+  else{o={html:'',text:'',att:[]};h=parsePart(lat(u).replace(/^\d+\r?\n/,'').replace(/^From .*\r?\n/,''),o)}
+ }catch(e){out.innerHTML='<div class="card"><b>Datei konnte nicht gelesen werden.</b><p>'+esc(e.message)+'</p></div>';return}
+ const R=analyze(h,o),F=R.F.sort((a,b)=>order[a.s]-order[b.s]);
+ const v=R.score>=60?['Hohes Risiko – sehr wahrscheinlich Phishing/Betrug','--hi']:R.score>=30?['Verdächtig – mit Vorsicht behandeln','--me']:R.score>=10?['Leichte Auffälligkeiten','--lo']:['Keine deutlichen Auffälligkeiten','--ok'];
+ const rows=[['Betreff',R.subj],['Von',R.from],['Reply-To',ew(hv(h,'reply-to'))],['Return-Path',hv(h,'return-path')],['An',ew(hv(h,'to'))],['Cc',ew(hv(h,'cc'))],['Datum',hv(h,'date')],['Message-ID',hv(h,'message-id')],['X-Mailer / Client',hv(h,'x-mailer')||hv(h,'user-agent')],['Originating IP',hv(h,'x-originating-ip')||hv(h,'x-sender-ip')]].filter(r=>r[1]);
+ out.innerHTML=
+ '<h2>Ergebnis: '+esc(file.name)+'</h2><div class="card verdict" style="--v:var('+v[1]+')"><div class="n">'+R.score+'</div><div><h2>'+v[0]+'</h2><div class="bar"><i style="width:'+R.score+'%"></i></div></div></div>'+
+ '<h2>Befunde ('+F.filter(x=>x.s!='ok').length+')</h2><div class="card">'+F.map(x=>'<div class="fi"><span class="badge '+x.s+'">'+lbl[x.s]+'</span><div><b>'+esc(x.t)+'</b>'+(x.d?'<p>'+esc(x.d)+'</p>':'')+'</div></div>').join('')+'</div>'+
+ '<h2>Header</h2><div class="card">'+tbl(['Feld','Wert'],rows.map(r=>'<tr><th>'+r[0]+'</th><td>'+esc(r[1])+'</td></tr>'))+'<details><summary>Alle Rohdaten-Header ('+h.length+')</summary>'+tbl(['Header','Wert'],h.map(r=>'<tr><th>'+esc(r[0])+'</th><td>'+esc(r[1])+'</td></tr>'))+'</details></div>'+
+ '<h2>Übertragungsweg ('+R.rec.length+' Stationen, neueste zuerst)</h2><div class="card">'+(R.rec.length?tbl(['#','Von','Über','IP','Zeit'],R.rec.map((r,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(r.from)+'</td><td>'+esc(r.by)+'</td><td>'+esc(r.ip)+'</td><td>'+esc(r.t)+'</td></tr>')):'Keine Received-Header vorhanden.')+'</div>'+
+ '<h2>Links ('+R.links.length+')</h2><div class="card">'+(R.links.length?tbl(['Ziel (nicht klickbar)','Angezeigter Text','Bewertung'],R.links.map(l=>'<tr><td><code>'+esc(l.u.replace(/^http/i,'hxxp'))+'</code></td><td>'+esc(l.t)+'</td><td>'+(l.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td></tr>')):'Keine Links.')+'</div>'+
+ '<h2>Anhänge ('+o.att.length+')</h2><div class="card">'+(o.att.length?tbl(['Datei','Typ','Größe','SHA-256','Bewertung'],o.att.map((a,i)=>'<tr><td>'+esc(a.name)+'</td><td>'+esc(a.type)+'</td><td>'+a.bytes.length+' B</td><td><code id="h'+i+'">…</code></td><td>'+(a.f.map(([s,d])=>'<span class="tag '+s+'">'+esc(d)+'</span>').join('')||'–')+'</td></tr>')):'Keine Anhänge.')+'</div>'+
+ '<h2>Inhalt</h2><div class="card"><pre>'+esc(R.text.slice(0,20000)||'(kein Textinhalt)')+'</pre>'+(o.html?'<details><summary>HTML-Quelltext anzeigen</summary><pre>'+esc(o.html.slice(0,60000))+'</pre></details>':'')+'</div>';
+ o.att.forEach(async(a,i)=>{try{const d=await crypto.subtle.digest('SHA-256',a.bytes),s=[...new Uint8Array(d)].map(x=>x.toString(16).padStart(2,'0')).join('');$('h'+i).textContent=s}catch{$('h'+i).textContent='n/a'}});
+}
+const f=$('f'),dz=$('drop');
+f.onchange=()=>f.files[0]&&run(f.files[0]);
+['dragover','dragenter'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.add('on')}));
+['dragleave','drop'].forEach(e=>dz.addEventListener(e,x=>{x.preventDefault();dz.classList.remove('on')}));
+dz.addEventListener('drop',x=>{const fl=x.dataTransfer.files[0];if(fl)run(fl)});
+</script></body></html>
